@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LFM2.5-1.2B-JP チャット (WebGPU)</title>
+<title>Qwen3.5-0.8B チャット (WebGPU)</title>
 <style>
   :root{
     --bg:#0e0f12; --panel:#15171c; --panel2:#1b1e25; --border:#2a2e38;
@@ -97,11 +97,14 @@
     <div class="title">
       <span class="dot" id="status-dot"></span>
       <div>
-        <h1>LFM2.5-1.2B-JP チャット</h1>
+        <h1>Qwen3.5-0.8B チャット</h1>
         <div class="sub">WebGPU ローカル推論 ・ Transformers.js</div>
       </div>
     </div>
     <div class="right">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--sub);cursor:pointer;">
+        <input type="checkbox" id="thinking-toggle" style="cursor:pointer;">思考モード
+      </label>
       <select id="dtype-select" title="量子化（精度/速度）">
         <option value="q4" selected>q4（軽量・高速）</option>
         <option value="fp16">fp16（高精度）</option>
@@ -120,7 +123,7 @@
   <div id="chat">
     <div id="welcome">
       <h2>こんにちは 👋</h2>
-      <p>このチャットは <b>LiquidAI/LFM2.5-1.2B-JP-ONNX</b> モデルをあなたのブラウザの WebGPU 上で直接実行します。サーバーには何も送信されません。初回はモデルファイル（数百MB〜）のダウンロードが必要です。</p>
+      <p>このチャットは <b>onnx-community/Qwen3.5-0.8B-ONNX</b> モデルをあなたのブラウザの WebGPU 上で直接実行します。サーバーには何も送信されません。初回はモデルファイル（数百MB〜）のダウンロードが必要です。Qwen3.5-0.8B はデフォルトで non-thinking モード（即答）です。「思考モード」をオンにすると &lt;think&gt; での思考過程付きで回答します。</p>
       <div class="badge">device: webgpu ・ dtype: 選択可 ・ 完全ローカル実行</div>
     </div>
   </div>
@@ -132,7 +135,7 @@
       <button id="stop-btn">停止</button>
     </div>
     <div class="hint">
-      <span id="model-info">モデル: LiquidAI/LFM2.5-1.2B-JP-ONNX</span>
+      <span id="model-info">モデル: onnx-community/Qwen3.5-0.8B-ONNX</span>
       <span id="perf-info"></span>
     </div>
   </div>
@@ -141,13 +144,13 @@
 
 <script type="module">
 import {
-  AutoTokenizer,
-  AutoModelForCausalLM,
+  AutoProcessor,
+  Qwen3_5ForConditionalGeneration,
   TextStreamer,
   InterruptableStoppingCriteria,
 } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6";
 
-const MODEL_ID = "LiquidAI/LFM2.5-1.2B-JP-ONNX";
+const MODEL_ID = "onnx-community/Qwen3.5-0.8B-ONNX";
 
 const els = {
   statusDot: document.getElementById("status-dot"),
@@ -156,6 +159,7 @@ const els = {
   progressBar: document.getElementById("progress-bar"),
   loadBtn: document.getElementById("load-btn"),
   dtypeSelect: document.getElementById("dtype-select"),
+  thinkingToggle: document.getElementById("thinking-toggle"),
   resetBtn: document.getElementById("reset-btn"),
   chat: document.getElementById("chat"),
   welcome: document.getElementById("welcome"),
@@ -165,6 +169,7 @@ const els = {
   perfInfo: document.getElementById("perf-info"),
 };
 
+let processor = null;
 let tokenizer = null;
 let model = null;
 let modelReady = false;
@@ -208,13 +213,18 @@ async function loadModel() {
     setStatus("WebGPU を確認中...", "loading");
     await checkWebGPU();
 
-    setStatus("トークナイザーを読み込み中...", "loading");
-    tokenizer = await AutoTokenizer.from_pretrained(MODEL_ID);
+    setStatus("プロセッサ/トークナイザーを読み込み中...", "loading");
+    processor = await AutoProcessor.from_pretrained(MODEL_ID);
+    tokenizer = processor.tokenizer;
 
     setStatus("モデルを読み込み中... (初回はダウンロードに時間がかかります)", "loading");
     const seenFiles = {};
-    model = await AutoModelForCausalLM.from_pretrained(MODEL_ID, {
-      dtype,
+    model = await Qwen3_5ForConditionalGeneration.from_pretrained(MODEL_ID, {
+      dtype: {
+        embed_tokens: dtype,
+        vision_encoder: "fp16",
+        decoder_model_merged: dtype,
+      },
       device: "webgpu",
       progress_callback: (p) => {
         if (p.status === "progress") {
@@ -341,17 +351,20 @@ async function sendMessage() {
   });
 
   try {
-    const inputs = tokenizer.apply_chat_template(messages, {
+    const enableThinking = els.thinkingToggle.checked;
+    const text = processor.apply_chat_template(messages, {
       add_generation_prompt: true,
-      return_dict: true,
+      enable_thinking: enableThinking,
     });
+    const inputs = await processor(text);
 
     await model.generate({
       ...inputs,
       max_new_tokens: 768,
       do_sample: true,
-      temperature: 0.3,
-      top_k: 50,
+      temperature: enableThinking ? 0.6 : 0.3,
+      top_k: 20,
+      top_p: 0.95,
       repetition_penalty: 1.05,
       streamer,
       stopping_criteria: stoppingCriteria,
