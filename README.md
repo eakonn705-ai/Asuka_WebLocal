@@ -1,2 +1,2 @@
 # Asuka-WebLocal
-Just an experimental project.
+持ち運べるパーソナルAI。未完成
